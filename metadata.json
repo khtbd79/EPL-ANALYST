@@ -1,0 +1,6 @@
+{
+  "name": "EPL PREDICT",
+  "description": "Professional offline football analytics, match prediction engine, and statistical performance platform for the English Premier League.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
