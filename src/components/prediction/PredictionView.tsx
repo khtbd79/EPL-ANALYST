@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   TrendingUp,
   Save,
@@ -6,16 +6,27 @@ import {
   AlertTriangle,
   Play,
   Check,
+  Zap,
+  Percent,
+  ChevronDown,
+  ChevronUp,
+  Flame,
+  Activity,
+  Sliders,
 } from 'lucide-react';
 import {
   MatchRecord,
   Team,
   AppSettings,
   PredictionResult,
+  OddsData,
+  TacticalAdjustments,
 } from '../../types';
 import { runPredictionEngine } from '../../engine/predictionEngine';
 import { calculateBrierScore, calculateLogLoss, determineOutcome } from '../../engine/metrics';
 import { getEligibleTeamsForSeason } from '../../utils/teamUtils';
+import { detectValueBets } from '../../engine/valueBet';
+import { ValueBetCard } from './ValueBetCard';
 
 interface PredictionViewProps {
   matches: MatchRecord[];
@@ -42,6 +53,22 @@ export const PredictionView: React.FC<PredictionViewProps> = ({
   const [isSimulating, setIsSimulating] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
+  // Decimal Odds & Automated Value-Bet Detection Parameters
+  const [odds, setOdds] = useState<OddsData>({
+    homeOdds: null,
+    drawOdds: null,
+    awayOdds: null,
+    over25Odds: null,
+    under25Odds: null,
+  });
+  const [thresholdPct, setThresholdPct] = useState<number>(5.0);
+  const [showOddsInputs, setShowOddsInputs] = useState<boolean>(true);
+
+  // Pre-Match Tactical & Fatigue Multipliers
+  const [tacticalAdjustments, setTacticalAdjustments] = useState<TacticalAdjustments>({});
+  const [showTacticalPanel, setShowTacticalPanel] = useState<boolean>(false);
+
+  // Load selected fixture details and odds
   useEffect(() => {
     if (selectedMatchId) {
       setMatchId(selectedMatchId);
@@ -49,11 +76,29 @@ export const PredictionView: React.FC<PredictionViewProps> = ({
       if (match) {
         setHomeTeamId(match.homeTeamId);
         setAwayTeamId(match.awayTeamId);
+        if (match.odds) {
+          setOdds({
+            homeOdds: match.odds.homeOdds ?? null,
+            drawOdds: match.odds.drawOdds ?? null,
+            awayOdds: match.odds.awayOdds ?? null,
+            over25Odds: match.odds.over25Odds ?? null,
+            under25Odds: match.odds.under25Odds ?? null,
+          });
+        }
       }
     } else if (matches.length > 0 && !matchId) {
       setMatchId(matches[0].id);
       setHomeTeamId(matches[0].homeTeamId);
       setAwayTeamId(matches[0].awayTeamId);
+      if (matches[0].odds) {
+        setOdds({
+          homeOdds: matches[0].odds.homeOdds ?? null,
+          drawOdds: matches[0].odds.drawOdds ?? null,
+          awayOdds: matches[0].odds.awayOdds ?? null,
+          over25Odds: matches[0].odds.over25Odds ?? null,
+          under25Odds: matches[0].odds.under25Odds ?? null,
+        });
+      }
     }
   }, [selectedMatchId, matches]);
 
@@ -65,6 +110,23 @@ export const PredictionView: React.FC<PredictionViewProps> = ({
     if (match) {
       setHomeTeamId(match.homeTeamId);
       setAwayTeamId(match.awayTeamId);
+      if (match.odds) {
+        setOdds({
+          homeOdds: match.odds.homeOdds ?? null,
+          drawOdds: match.odds.drawOdds ?? null,
+          awayOdds: match.odds.awayOdds ?? null,
+          over25Odds: match.odds.over25Odds ?? null,
+          under25Odds: match.odds.under25Odds ?? null,
+        });
+      } else {
+        setOdds({
+          homeOdds: null,
+          drawOdds: null,
+          awayOdds: null,
+          over25Odds: null,
+          under25Odds: null,
+        });
+      }
     }
   };
 
@@ -89,6 +151,9 @@ export const PredictionView: React.FC<PredictionViewProps> = ({
         settings,
         season: match?.season || (selectedSeason !== 'ALL' ? selectedSeason : '2025-2026'),
         matchId: match?.id || null,
+        odds,
+        valueBetThreshold: thresholdPct,
+        tacticalAdjustments,
       });
 
       // If match is already completed, evaluate accuracy
@@ -124,9 +189,36 @@ export const PredictionView: React.FC<PredictionViewProps> = ({
     }, 150);
   };
 
+  // Dynamically compute Value Bet report whenever odds, threshold or prediction changes
+  const valueReport = useMemo(() => {
+    if (!prediction) {
+      return { hasAnyValueBet: false, alerts: [], topValueBet: null, bookmakerOverroundPct: null };
+    }
+    return detectValueBets(
+      {
+        homeWinProb: prediction.homeWinProb,
+        drawProb: prediction.drawProb,
+        awayWinProb: prediction.awayWinProb,
+        over25Prob: prediction.over25Prob,
+        under25Prob: prediction.under25Prob,
+        homeTeamName: prediction.homeTeamName,
+        awayTeamName: prediction.awayTeamName,
+      },
+      odds,
+      thresholdPct
+    );
+  }, [prediction, odds, thresholdPct]);
+
   const handleSaveToHistory = async () => {
     if (!prediction) return;
-    await onSavePrediction(prediction);
+    const toSave: PredictionResult = {
+      ...prediction,
+      oddsUsed: odds,
+      valueBets: valueReport.alerts,
+      hasValueBet: valueReport.hasAnyValueBet,
+      tacticalAdjustments,
+    };
+    await onSavePrediction(toSave);
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 3000);
   };
@@ -245,6 +337,330 @@ export const PredictionView: React.FC<PredictionViewProps> = ({
             </span>
           </div>
         </div>
+
+        {/* Bookmaker Decimal Odds & Automated Value-Bet Threshold Toolbar */}
+        <div className="pt-3 border-t border-slate-800 space-y-3">
+          <div
+            className="flex items-center justify-between cursor-pointer select-none"
+            onClick={() => setShowOddsInputs(!showOddsInputs)}
+          >
+            <div className="flex items-center gap-2 text-xs font-mono text-slate-300">
+              <Percent className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="font-bold text-white uppercase tracking-wider">
+                Bookmaker Decimal Odds & Value Bet Detection Baseline
+              </span>
+              {(odds.homeOdds || odds.drawOdds || odds.awayOdds) && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-800">
+                  Odds Configured
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400 hover:text-slate-200">
+              <span>{showOddsInputs ? 'Hide Settings' : 'Configure Odds & Alert Threshold'}</span>
+              {showOddsInputs ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            </div>
+          </div>
+
+          {showOddsInputs && (
+            <div className="p-3.5 bg-[#0a0e14] rounded border border-slate-800/80 space-y-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 font-mono text-xs">
+                <div>
+                  <label className="text-[10px] text-slate-500 uppercase block mb-1">Home Odds (1)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="1.01"
+                    placeholder="e.g. 2.10"
+                    value={odds.homeOdds !== null && odds.homeOdds !== undefined ? String(odds.homeOdds) : ''}
+                    onChange={(e) => setOdds({ ...odds, homeOdds: e.target.value ? parseFloat(e.target.value) : null })}
+                    className="w-full bg-[#111822] border border-slate-700 rounded px-2.5 py-1.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 tabular-nums text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] text-slate-500 uppercase block mb-1">Draw Odds (X)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="1.01"
+                    placeholder="e.g. 3.40"
+                    value={odds.drawOdds !== null && odds.drawOdds !== undefined ? String(odds.drawOdds) : ''}
+                    onChange={(e) => setOdds({ ...odds, drawOdds: e.target.value ? parseFloat(e.target.value) : null })}
+                    className="w-full bg-[#111822] border border-slate-700 rounded px-2.5 py-1.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 tabular-nums text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] text-slate-500 uppercase block mb-1">Away Odds (2)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="1.01"
+                    placeholder="e.g. 3.80"
+                    value={odds.awayOdds !== null && odds.awayOdds !== undefined ? String(odds.awayOdds) : ''}
+                    onChange={(e) => setOdds({ ...odds, awayOdds: e.target.value ? parseFloat(e.target.value) : null })}
+                    className="w-full bg-[#111822] border border-slate-700 rounded px-2.5 py-1.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 tabular-nums text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] text-slate-500 uppercase block mb-1">Over 2.5 Goals</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="1.01"
+                    placeholder="e.g. 1.85"
+                    value={odds.over25Odds !== null && odds.over25Odds !== undefined ? String(odds.over25Odds) : ''}
+                    onChange={(e) => setOdds({ ...odds, over25Odds: e.target.value ? parseFloat(e.target.value) : null })}
+                    className="w-full bg-[#111822] border border-slate-700 rounded px-2.5 py-1.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 tabular-nums text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] text-slate-500 uppercase block mb-1">Under 2.5 Goals</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="1.01"
+                    placeholder="e.g. 1.95"
+                    value={odds.under25Odds !== null && odds.under25Odds !== undefined ? String(odds.under25Odds) : ''}
+                    onChange={(e) => setOdds({ ...odds, under25Odds: e.target.value ? parseFloat(e.target.value) : null })}
+                    className="w-full bg-[#111822] border border-slate-700 rounded px-2.5 py-1.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 tabular-nums text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] text-slate-500 uppercase block mb-1">
+                    Alert Edge: <strong className="text-emerald-400">+{thresholdPct}%</strong>
+                  </label>
+                  <div className="flex items-center gap-1">
+                    {[3, 5, 8, 10].map((th) => (
+                      <button
+                        key={th}
+                        type="button"
+                        onClick={() => setThresholdPct(th)}
+                        className={`flex-1 py-1 rounded text-[10px] font-bold border transition-colors ${
+                          thresholdPct === th
+                            ? 'bg-emerald-600 border-emerald-500 text-white'
+                            : 'bg-[#111822] border-slate-700 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        +{th}%
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-500 pt-1">
+                <span>
+                  ⚡ Automated Value Alert fires when: <strong>Model Probability &gt; Bookmaker Implied Probability + {thresholdPct}%</strong>
+                </span>
+                {(odds.homeOdds || odds.drawOdds || odds.awayOdds || odds.over25Odds || odds.under25Odds) && (
+                  <button
+                    type="button"
+                    onClick={() => setOdds({ homeOdds: null, drawOdds: null, awayOdds: null, over25Odds: null, under25Odds: null })}
+                    className="text-rose-400 hover:underline text-[10px]"
+                  >
+                    Clear Odds
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Pre-Match Tactical & Fatigue Adjustment Multipliers */}
+        <div className="pt-3 border-t border-slate-800 space-y-3">
+          <div
+            className="flex items-center justify-between cursor-pointer select-none"
+            onClick={() => setShowTacticalPanel(!showTacticalPanel)}
+          >
+            <div className="flex items-center gap-2 text-xs font-mono text-slate-300">
+              <Activity className="w-3.5 h-3.5 text-blue-400" />
+              <span className="font-bold text-white uppercase tracking-wider">
+                Tactical & Fatigue Pre-Match Multipliers
+              </span>
+              {Object.values(tacticalAdjustments).some(Boolean) && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-950/80 text-blue-400 border border-blue-800 animate-pulse">
+                  {Object.values(tacticalAdjustments).filter(Boolean).length} Active Multiplier{Object.values(tacticalAdjustments).filter(Boolean).length > 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400 hover:text-slate-200">
+              <span>{showTacticalPanel ? 'Hide Multipliers' : 'Fine-Tune Expected Goals (xG)'}</span>
+              {showTacticalPanel ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            </div>
+          </div>
+
+          {showTacticalPanel && (
+            <div className="p-3.5 bg-[#0a0e14] rounded border border-slate-800/80 space-y-4 font-mono text-xs">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Home Team Tactical Adjustments */}
+                <div className="space-y-2 p-3 bg-[#111822] rounded border border-slate-800">
+                  <div className="flex items-center justify-between pb-1.5 border-b border-slate-800 text-[11px] font-bold text-emerald-400 uppercase">
+                    <span>{homeTeam?.name || 'Home Team'} Modifiers</span>
+                    <span className="text-[10px] text-slate-500 font-normal">Lambda (λ) Multipliers</span>
+                  </div>
+
+                  <div className="space-y-1.5 text-xs">
+                    <label className="flex items-center justify-between p-1.5 rounded hover:bg-[#162130] cursor-pointer">
+                      <span className="text-slate-300">Heavy Fixture Congestion / Fatigue</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-amber-400 font-bold">-5% xG</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(tacticalAdjustments.homeFatigue)}
+                          onChange={(e) => setTacticalAdjustments({ ...tacticalAdjustments, homeFatigue: e.target.checked })}
+                          className="rounded border-slate-700 text-emerald-500 focus:ring-0"
+                        />
+                      </div>
+                    </label>
+
+                    <label className="flex items-center justify-between p-1.5 rounded hover:bg-[#162130] cursor-pointer">
+                      <span className="text-slate-300">Key Striker / Goalscorer Missing</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-rose-400 font-bold">-15% Attack</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(tacticalAdjustments.homeKeyStrikerMissing)}
+                          onChange={(e) => setTacticalAdjustments({ ...tacticalAdjustments, homeKeyStrikerMissing: e.target.checked })}
+                          className="rounded border-slate-700 text-emerald-500 focus:ring-0"
+                        />
+                      </div>
+                    </label>
+
+                    <label className="flex items-center justify-between p-1.5 rounded hover:bg-[#162130] cursor-pointer">
+                      <span className="text-slate-300">Key Defender / GK Missing</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-amber-400 font-bold">+15% Opponent</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(tacticalAdjustments.homeKeyDefenderMissing)}
+                          onChange={(e) => setTacticalAdjustments({ ...tacticalAdjustments, homeKeyDefenderMissing: e.target.checked })}
+                          className="rounded border-slate-700 text-emerald-500 focus:ring-0"
+                        />
+                      </div>
+                    </label>
+
+                    <label className="flex items-center justify-between p-1.5 rounded hover:bg-[#162130] cursor-pointer">
+                      <span className="text-slate-300">Low-Block / Deep Defense Setup</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-blue-400 font-bold">-10% Match xG</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(tacticalAdjustments.lowBlockHome)}
+                          onChange={(e) => setTacticalAdjustments({ ...tacticalAdjustments, lowBlockHome: e.target.checked })}
+                          className="rounded border-slate-700 text-emerald-500 focus:ring-0"
+                        />
+                      </div>
+                    </label>
+
+                    <label className="flex items-center justify-between p-1.5 rounded hover:bg-[#162130] cursor-pointer">
+                      <span className="text-slate-300">High-Intensity Pressing Style</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-emerald-400 font-bold">+8% Attack</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(tacticalAdjustments.highPressHome)}
+                          onChange={(e) => setTacticalAdjustments({ ...tacticalAdjustments, highPressHome: e.target.checked })}
+                          className="rounded border-slate-700 text-emerald-500 focus:ring-0"
+                        />
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Away Team Tactical Adjustments */}
+                <div className="space-y-2 p-3 bg-[#111822] rounded border border-slate-800">
+                  <div className="flex items-center justify-between pb-1.5 border-b border-slate-800 text-[11px] font-bold text-blue-400 uppercase">
+                    <span>{awayTeam?.name || 'Away Team'} Modifiers</span>
+                    <span className="text-[10px] text-slate-500 font-normal">Mu (μ) Multipliers</span>
+                  </div>
+
+                  <div className="space-y-1.5 text-xs">
+                    <label className="flex items-center justify-between p-1.5 rounded hover:bg-[#162130] cursor-pointer">
+                      <span className="text-slate-300">Heavy Fixture Congestion / Fatigue</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-amber-400 font-bold">-5% xG</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(tacticalAdjustments.awayFatigue)}
+                          onChange={(e) => setTacticalAdjustments({ ...tacticalAdjustments, awayFatigue: e.target.checked })}
+                          className="rounded border-slate-700 text-emerald-500 focus:ring-0"
+                        />
+                      </div>
+                    </label>
+
+                    <label className="flex items-center justify-between p-1.5 rounded hover:bg-[#162130] cursor-pointer">
+                      <span className="text-slate-300">Key Striker / Goalscorer Missing</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-rose-400 font-bold">-15% Attack</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(tacticalAdjustments.awayKeyStrikerMissing)}
+                          onChange={(e) => setTacticalAdjustments({ ...tacticalAdjustments, awayKeyStrikerMissing: e.target.checked })}
+                          className="rounded border-slate-700 text-emerald-500 focus:ring-0"
+                        />
+                      </div>
+                    </label>
+
+                    <label className="flex items-center justify-between p-1.5 rounded hover:bg-[#162130] cursor-pointer">
+                      <span className="text-slate-300">Key Defender / GK Missing</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-amber-400 font-bold">+15% Opponent</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(tacticalAdjustments.awayKeyDefenderMissing)}
+                          onChange={(e) => setTacticalAdjustments({ ...tacticalAdjustments, awayKeyDefenderMissing: e.target.checked })}
+                          className="rounded border-slate-700 text-emerald-500 focus:ring-0"
+                        />
+                      </div>
+                    </label>
+
+                    <label className="flex items-center justify-between p-1.5 rounded hover:bg-[#162130] cursor-pointer">
+                      <span className="text-slate-300">Low-Block / Deep Defense Setup</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-blue-400 font-bold">-10% Match xG</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(tacticalAdjustments.lowBlockAway)}
+                          onChange={(e) => setTacticalAdjustments({ ...tacticalAdjustments, lowBlockAway: e.target.checked })}
+                          className="rounded border-slate-700 text-emerald-500 focus:ring-0"
+                        />
+                      </div>
+                    </label>
+
+                    <label className="flex items-center justify-between p-1.5 rounded hover:bg-[#162130] cursor-pointer">
+                      <span className="text-slate-300">High-Intensity Pressing Style</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-emerald-400 font-bold">+8% Attack</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(tacticalAdjustments.highPressAway)}
+                          onChange={(e) => setTacticalAdjustments({ ...tacticalAdjustments, highPressAway: e.target.checked })}
+                          className="rounded border-slate-700 text-emerald-500 focus:ring-0"
+                        />
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {Object.values(tacticalAdjustments).some(Boolean) && (
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setTacticalAdjustments({})}
+                    className="text-[11px] text-rose-400 hover:underline"
+                  >
+                    Reset Tactical Multipliers
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Prediction Output Section */}
@@ -283,26 +699,76 @@ export const PredictionView: React.FC<PredictionViewProps> = ({
               </div>
             </div>
 
+            {/* Top Value-Bet Detection Alert Banner */}
+            {valueReport.hasAnyValueBet && (
+              <div className="mt-4 p-3 bg-gradient-to-r from-emerald-950/60 via-emerald-900/30 to-slate-900 border border-emerald-500/60 rounded-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 font-mono text-xs shadow-lg shadow-emerald-950/30">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-1.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
+                    <Zap className="w-4 h-4 fill-emerald-400" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-white uppercase tracking-wider">
+                        Automated Value-Bet Alert Triggered
+                      </span>
+                      <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-emerald-500 text-slate-950">
+                        {valueReport.alerts.filter((a) => a.isValue).length} Market{valueReport.alerts.filter((a) => a.isValue).length > 1 ? 's' : ''} Identified
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-emerald-300/80 mt-0.5">
+                      Model probability beats bookmaker implied probability by &gt;+{thresholdPct.toFixed(1)}% edge threshold.
+                    </div>
+                  </div>
+                </div>
+                {valueReport.topValueBet && (
+                  <div className="text-right self-end sm:self-center bg-emerald-950/80 px-2.5 py-1 rounded border border-emerald-500/40">
+                    <span className="text-[10px] text-slate-400 uppercase block">Top Value Selection</span>
+                    <span className="font-bold text-emerald-400">
+                      {valueReport.topValueBet.selection} (+{valueReport.topValueBet.edgePct}% Edge)
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* 3-Way Win Probability Bar & Numbers */}
             <div className="mt-6 space-y-3">
               <div className="grid grid-cols-3 text-center">
-                <div>
+                <div className="flex flex-col items-center">
                   <div className="text-xs text-slate-400 font-mono uppercase">{prediction.homeTeamName} Win</div>
                   <div className="mt-1 text-3xl font-extrabold font-mono text-emerald-400 tabular-nums">
                     {prediction.homeWinProb}%
                   </div>
+                  {valueReport.alerts.find((a) => a.market === 'HOME_WIN' && a.isValue) && (
+                    <div className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse">
+                      <Zap className="w-2.5 h-2.5 fill-current" />
+                      <span>VALUE BET (+{valueReport.alerts.find((a) => a.market === 'HOME_WIN')?.edgePct}%)</span>
+                    </div>
+                  )}
                 </div>
-                <div>
+                <div className="flex flex-col items-center">
                   <div className="text-xs text-slate-400 font-mono uppercase">Draw</div>
                   <div className="mt-1 text-3xl font-extrabold font-mono text-slate-300 tabular-nums">
                     {prediction.drawProb}%
                   </div>
+                  {valueReport.alerts.find((a) => a.market === 'DRAW' && a.isValue) && (
+                    <div className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse">
+                      <Zap className="w-2.5 h-2.5 fill-current" />
+                      <span>VALUE BET (+{valueReport.alerts.find((a) => a.market === 'DRAW')?.edgePct}%)</span>
+                    </div>
+                  )}
                 </div>
-                <div>
+                <div className="flex flex-col items-center">
                   <div className="text-xs text-slate-400 font-mono uppercase">{prediction.awayTeamName} Win</div>
                   <div className="mt-1 text-3xl font-extrabold font-mono text-blue-400 tabular-nums">
                     {prediction.awayWinProb}%
                   </div>
+                  {valueReport.alerts.find((a) => a.market === 'AWAY_WIN' && a.isValue) && (
+                    <div className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse">
+                      <Zap className="w-2.5 h-2.5 fill-current" />
+                      <span>VALUE BET (+{valueReport.alerts.find((a) => a.market === 'AWAY_WIN')?.edgePct}%)</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -354,6 +820,16 @@ export const PredictionView: React.FC<PredictionViewProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Automated Value-Bet Detection & Bookmaker Edge Analysis */}
+          <ValueBetCard
+            valueReport={valueReport}
+            odds={odds}
+            homeTeamName={prediction.homeTeamName}
+            awayTeamName={prediction.awayTeamName}
+            thresholdPct={thresholdPct}
+            onOddsChange={setOdds}
+          />
 
           {/* Correct Scores & Goal Markets */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -419,15 +895,29 @@ export const PredictionView: React.FC<PredictionViewProps> = ({
                 </div>
                 <div className="py-2.5 flex items-center justify-between">
                   <span className="text-slate-300">Over 2.5 Goals</span>
-                  <span className="font-bold text-emerald-400 tabular-nums">
-                    {(prediction.over25Prob * 100).toFixed(1)}%
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {valueReport.alerts.find((a) => a.market === 'OVER_25' && a.isValue) && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse">
+                        VALUE (+{valueReport.alerts.find((a) => a.market === 'OVER_25')?.edgePct}%)
+                      </span>
+                    )}
+                    <span className="font-bold text-emerald-400 tabular-nums">
+                      {(prediction.over25Prob * 100).toFixed(1)}%
+                    </span>
+                  </div>
                 </div>
                 <div className="py-2.5 flex items-center justify-between">
                   <span className="text-slate-300">Under 2.5 Goals</span>
-                  <span className="font-bold text-slate-300 tabular-nums">
-                    {(prediction.under25Prob * 100).toFixed(1)}%
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {valueReport.alerts.find((a) => a.market === 'UNDER_25' && a.isValue) && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse">
+                        VALUE (+{valueReport.alerts.find((a) => a.market === 'UNDER_25')?.edgePct}%)
+                      </span>
+                    )}
+                    <span className="font-bold text-slate-300 tabular-nums">
+                      {(prediction.under25Prob * 100).toFixed(1)}%
+                    </span>
+                  </div>
                 </div>
                 <div className="py-2.5 flex items-center justify-between">
                   <span className="text-slate-300">Both Teams To Score (BTTS)</span>

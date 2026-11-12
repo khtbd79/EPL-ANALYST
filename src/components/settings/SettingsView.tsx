@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Sliders,
   Download,
@@ -8,6 +8,10 @@ import {
   RotateCcw,
   Check,
   AlertTriangle,
+  Database,
+  HardDrive,
+  CheckCircle2,
+  Layers,
 } from 'lucide-react';
 import { AppSettings, DEFAULT_WEIGHTS, DEFAULT_SETTINGS, AnalyticsWeights } from '../../types';
 import { localDB } from '../../db/indexedDB';
@@ -31,6 +35,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const [saveMsg, setSaveMsg] = useState('');
   const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [dbStats, setDbStats] = useState<{ teams: number; players: number; matches: number; predictions: number } | null>(null);
+
+  const fetchDbStats = async () => {
+    try {
+      const [t, p, m, pr] = await Promise.all([
+        localDB.getTeams(),
+        localDB.getPlayers(),
+        localDB.getMatches('ALL'),
+        localDB.getPredictions('ALL'),
+      ]);
+      setDbStats({ teams: t.length, players: p.length, matches: m.length, predictions: pr.length });
+    } catch (err) {
+      console.error('Error fetching database stats:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchDbStats();
+  }, []);
 
   // Calculate sum of weights for real-time normalized percentage display
   const sumWeights =
@@ -89,8 +112,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       const text = await file.text();
       const res = await localDB.importBackupJSON(text);
       setImportStatus(
-        `Imported: ${res.teams} teams, ${res.players} players, ${res.matches} matches, ${res.predictions} predictions.`
+        `Database restored successfully: ${res.teams} teams, ${res.players} players, ${res.matches} matches, ${res.predictions} predictions.`
       );
+      await fetchDbStats();
       await onRefreshData();
     } catch (err: unknown) {
       setImportStatus(`Import failed: ${err instanceof Error ? err.message : 'Invalid JSON file'}`);
@@ -116,6 +140,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     ) {
       if (window.confirm('Please confirm one more time: Wipe all teams, matches, and prediction records?')) {
         await localDB.clearAllData();
+        await fetchDbStats();
         await onRefreshData();
         alert('All local database records cleared.');
       }
@@ -263,54 +288,110 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </div>
 
-      {/* Data Management & Backup */}
-      <div className="bg-[#111822] border border-slate-800 rounded p-6 space-y-4">
-        <div className="pb-3 border-b border-slate-800">
-          <h3 className="text-sm font-semibold font-mono uppercase text-white tracking-wider">
-            Backup & Data Management
-          </h3>
-          <p className="text-xs text-slate-400 font-mono mt-1">
-            Export or restore complete IndexedDB snapshots without loss of historical records.
-          </p>
+      {/* Complete Database Snapshot Backup & Data Management */}
+      <div className="bg-[#111822] border border-slate-800 rounded p-6 space-y-5">
+        <div className="pb-3 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-semibold font-mono uppercase text-white tracking-wider flex items-center gap-2">
+              <Database className="w-4 h-4 text-emerald-400" />
+              Complete Database Snapshot Backup (Export/Import)
+            </h3>
+            <p className="text-xs text-slate-400 font-mono mt-1">
+              Deterministic 100% offline IndexedDB snapshot backup and restoration across sessions.
+            </p>
+          </div>
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/30 rounded text-[11px] font-mono text-emerald-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            Storage: IndexedDB Active
+          </div>
         </div>
 
+        {/* Live Database Record Telemetry */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="bg-[#0b0f14] border border-slate-800 rounded p-3 text-center">
+            <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">
+              Teams
+            </div>
+            <div className="text-lg font-mono font-bold text-white tabular-nums mt-0.5">
+              {dbStats?.teams ?? 0}
+            </div>
+          </div>
+          <div className="bg-[#0b0f14] border border-slate-800 rounded p-3 text-center">
+            <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">
+              Players
+            </div>
+            <div className="text-lg font-mono font-bold text-white tabular-nums mt-0.5">
+              {dbStats?.players ?? 0}
+            </div>
+          </div>
+          <div className="bg-[#0b0f14] border border-slate-800 rounded p-3 text-center">
+            <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">
+              Matches
+            </div>
+            <div className="text-lg font-mono font-bold text-white tabular-nums mt-0.5">
+              {dbStats?.matches ?? 0}
+            </div>
+          </div>
+          <div className="bg-[#0b0f14] border border-slate-800 rounded p-3 text-center">
+            <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">
+              Predictions
+            </div>
+            <div className="text-lg font-mono font-bold text-emerald-400 tabular-nums mt-0.5">
+              {dbStats?.predictions ?? 0}
+            </div>
+          </div>
+        </div>
+
+        {/* Snapshot Action Buttons */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <button
             onClick={handleExportJSON}
-            className="flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-mono text-slate-200 bg-[#162130] hover:bg-[#1c2a3e] border border-slate-700 rounded transition-colors"
+            className="flex items-center justify-center gap-2 px-4 py-3 text-xs font-mono font-medium text-slate-100 bg-[#162130] hover:bg-[#1f2e42] border border-slate-700 hover:border-emerald-500/50 rounded transition-all shadow-sm"
           >
             <Download className="w-4 h-4 text-emerald-400" />
-            <span>Export JSON Backup</span>
+            <span>Export Snapshot (.json)</span>
           </button>
 
-          <label className="flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-mono text-slate-200 bg-[#162130] hover:bg-[#1c2a3e] border border-slate-700 rounded cursor-pointer transition-colors">
+          <label className="flex items-center justify-center gap-2 px-4 py-3 text-xs font-mono font-medium text-slate-100 bg-[#162130] hover:bg-[#1f2e42] border border-slate-700 hover:border-blue-500/50 rounded cursor-pointer transition-all shadow-sm">
             <Upload className="w-4 h-4 text-blue-400" />
-            <span>Restore JSON Backup</span>
+            <span>Restore Snapshot (.json)</span>
             <input type="file" accept=".json" onChange={handleImportJSON} className="hidden" />
           </label>
 
           <button
             onClick={handleExportCSV}
-            className="flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-mono text-slate-200 bg-[#162130] hover:bg-[#1c2a3e] border border-slate-700 rounded transition-colors"
+            className="flex items-center justify-center gap-2 px-4 py-3 text-xs font-mono font-medium text-slate-100 bg-[#162130] hover:bg-[#1f2e42] border border-slate-700 hover:border-amber-500/50 rounded transition-all shadow-sm"
           >
             <FileSpreadsheet className="w-4 h-4 text-amber-400" />
-            <span>Export Matches CSV</span>
+            <span>Export Matches (.csv)</span>
           </button>
         </div>
 
         {importStatus && (
-          <div className="p-3 bg-[#0e141c] border border-slate-700 rounded text-xs font-mono text-slate-200">
-            {importStatus}
+          <div className="p-3.5 bg-[#0a0f16] border border-slate-700/80 rounded text-xs font-mono text-slate-200 flex items-center justify-between">
+            <span>{importStatus}</span>
+            <button
+              onClick={() => setImportStatus(null)}
+              className="text-[10px] text-slate-400 hover:text-white underline ml-3"
+            >
+              Dismiss
+            </button>
           </div>
         )}
 
-        <div className="pt-4 border-t border-slate-800 flex items-center justify-between">
-          <div className="text-xs text-slate-500 font-mono">
-            Danger Zone: Purge all local tables
+        {/* Danger Zone */}
+        <div className="pt-4 border-t border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <div className="text-xs font-mono text-rose-400 font-semibold">
+              Danger Zone: Purge Local Storage
+            </div>
+            <div className="text-[11px] font-mono text-slate-500 mt-0.5">
+              Permanently purges all IndexedDB object stores and resets to initial default clubs.
+            </div>
           </div>
           <button
             onClick={handleClearDatabase}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono text-rose-400 hover:text-white bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/60 rounded transition-colors"
+            className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-mono text-rose-300 hover:text-white bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/60 rounded transition-colors"
           >
             <Trash2 className="w-3.5 h-3.5" />
             <span>Wipe Local Database</span>

@@ -323,6 +323,52 @@ export interface PredictionResult {
   isCorrectOutcome?: boolean | null;
   brierScore?: number | null;
   logLoss?: number | null;
+
+  // Value Edge & Implied Probability Analysis
+  oddsUsed?: OddsData | null;
+  valueBets?: ValueBetAlert[];
+  hasValueBet?: boolean;
+
+  // Tactical & Fatigue Adjustment Multipliers
+  tacticalAdjustments?: TacticalAdjustments;
+}
+
+export interface TacticalAdjustments {
+  homeFatigue?: boolean;            // Heavy Fixture Congestion / Fatigue (-5% xG)
+  awayFatigue?: boolean;            // Heavy Fixture Congestion / Fatigue (-5% xG)
+  homeKeyStrikerMissing?: boolean;  // Key Striker Missing (-15% attack xG)
+  awayKeyStrikerMissing?: boolean;  // Key Striker Missing (-15% attack xG)
+  homeKeyDefenderMissing?: boolean; // Key Defender Missing (+15% opponent xG)
+  awayKeyDefenderMissing?: boolean; // Key Defender Missing (+15% opponent xG)
+  lowBlockHome?: boolean;           // Low-Block / Deep Defense (-10% match xG)
+  lowBlockAway?: boolean;           // Low-Block / Deep Defense (-10% match xG)
+  highPressHome?: boolean;          // High-Intensity Pressing (+8% attack xG)
+  highPressAway?: boolean;          // High-Intensity Pressing (+8% attack xG)
+}
+
+export type ValueBetVerdict = 'STRONG_VALUE' | 'VALUE' | 'MARGINAL_EDGE' | 'NO_VALUE';
+
+export interface ValueBetAlert {
+  market: 'HOME_WIN' | 'DRAW' | 'AWAY_WIN' | 'OVER_25' | 'UNDER_25';
+  marketLabel: string;
+  selection: string;
+  decimalOdds: number;
+  modelProbPct: number;          // e.g. 52.4%
+  impliedProbPct: number;        // e.g. 45.5% (1 / decimalOdds * 100)
+  fairOdds: number;              // 100 / modelProbPct (Fair Value Odds)
+  edgePct: number;               // modelProbPct - impliedProbPct (e.g. +6.9%)
+  clvRatio: number;              // (decimalOdds / fairOdds) - 1
+  hasEdge: boolean;              // modelProbPct > impliedProbPct
+  isValue: boolean;              // edgePct >= threshold (default 5%)
+  verdict: ValueBetVerdict;
+}
+
+export interface ValueBetReport {
+  hasAnyValueBet: boolean;
+  alerts: ValueBetAlert[];
+  topValueBet: ValueBetAlert | null;
+  bookmakerOverroundPct: number | null;
+  avgEdgePct?: number | null;
 }
 
 export interface AnalyticsWeights {

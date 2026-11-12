@@ -22,8 +22,11 @@ export interface ModelAccuracyReport {
   totalEvaluated: number;
   correctOutcomes: number;
   overallAccuracyPct: number | null;
+  winRatePct: number | null;
   avgBrierScore: number | null;
+  brierSkillScorePct: number | null;
   avgLogLoss: number | null;
+  avgCLVPct: number | null;
   homeWinAccuracyPct: number | null;
   drawAccuracyPct: number | null;
   awayWinAccuracyPct: number | null;
@@ -97,8 +100,11 @@ export function evaluateModelPerformance(predictions: PredictionResult[]): Model
       totalEvaluated: 0,
       correctOutcomes: 0,
       overallAccuracyPct: null,
+      winRatePct: null,
       avgBrierScore: null,
+      brierSkillScorePct: null,
       avgLogLoss: null,
+      avgCLVPct: null,
       homeWinAccuracyPct: null,
       drawAccuracyPct: null,
       awayWinAccuracyPct: null,
@@ -110,6 +116,8 @@ export function evaluateModelPerformance(predictions: PredictionResult[]): Model
   let correctCount = 0;
   let totalBrier = 0;
   let totalLogLoss = 0;
+  let clvSum = 0;
+  let clvCount = 0;
 
   let homeTotal = 0;
   let homeCorrect = 0;
@@ -179,6 +187,26 @@ export function evaluateModelPerformance(predictions: PredictionResult[]): Model
     totalBrier += brier;
     totalLogLoss += logloss;
 
+    // Closing Line Value (CLV) Calculation
+    if (pred.oddsUsed) {
+      if (predictedOutcome === 'HOME_WIN' && pred.oddsUsed.homeOdds && pred.oddsUsed.homeOdds > 1) {
+        const fairOdds = 100 / pred.homeWinProb;
+        const clv = ((pred.oddsUsed.homeOdds / fairOdds) - 1) * 100;
+        clvSum += clv;
+        clvCount++;
+      } else if (predictedOutcome === 'DRAW' && pred.oddsUsed.drawOdds && pred.oddsUsed.drawOdds > 1) {
+        const fairOdds = 100 / pred.drawProb;
+        const clv = ((pred.oddsUsed.drawOdds / fairOdds) - 1) * 100;
+        clvSum += clv;
+        clvCount++;
+      } else if (predictedOutcome === 'AWAY_WIN' && pred.oddsUsed.awayOdds && pred.oddsUsed.awayOdds > 1) {
+        const fairOdds = 100 / pred.awayWinProb;
+        const clv = ((pred.oddsUsed.awayOdds / fairOdds) - 1) * 100;
+        clvSum += clv;
+        clvCount++;
+      }
+    }
+
     // Calibration: map each probability to bin
     const checkOutcomeInBin = (prob: number, didOccur: boolean) => {
       const p = prob / 100;
@@ -204,12 +232,19 @@ export function evaluateModelPerformance(predictions: PredictionResult[]): Model
     actualObservedFreq: b.count > 0 ? Number((b.actualHits / b.count).toFixed(3)) : null,
   }));
 
+  const avgBrier = Number((totalBrier / verified.length).toFixed(4));
+  const brierSkillScore = Number(((1 - (avgBrier / 0.6667)) * 100).toFixed(1));
+  const avgCLV = clvCount > 0 ? Number((clvSum / clvCount).toFixed(2)) : null;
+
   return {
     totalEvaluated: verified.length,
     correctOutcomes: correctCount,
     overallAccuracyPct: Number(((correctCount / verified.length) * 100).toFixed(1)),
-    avgBrierScore: Number((totalBrier / verified.length).toFixed(4)),
+    winRatePct: Number(((correctCount / verified.length) * 100).toFixed(1)),
+    avgBrierScore: avgBrier,
+    brierSkillScorePct: brierSkillScore,
     avgLogLoss: Number((totalLogLoss / verified.length).toFixed(4)),
+    avgCLVPct: avgCLV,
     homeWinAccuracyPct: homeTotal > 0 ? Number(((homeCorrect / homeTotal) * 100).toFixed(1)) : null,
     drawAccuracyPct: drawTotal > 0 ? Number(((drawCorrect / drawTotal) * 100).toFixed(1)) : null,
     awayWinAccuracyPct: awayTotal > 0 ? Number(((awayCorrect / awayTotal) * 100).toFixed(1)) : null,

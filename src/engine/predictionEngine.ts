@@ -17,8 +17,11 @@ import {
   PredictionResult,
   CorrectScoreProb,
   TeamMatchStats,
+  OddsData,
+  TacticalAdjustments,
 } from '../types';
 import { countAvailableStats, isStatAvailable } from '../utils/statDefinitions';
+import { detectValueBets } from './valueBet';
 
 // Factorial helper
 function factorial(n: number): number {
@@ -63,10 +66,25 @@ export interface PredictionEngineInput {
   settings: AppSettings;
   season: string;
   matchId?: string | null;
+  odds?: OddsData | null;
+  valueBetThreshold?: number;
+  tacticalAdjustments?: TacticalAdjustments;
 }
 
 export function runPredictionEngine(input: PredictionEngineInput): PredictionResult {
-  const { homeTeam, awayTeam, homeStats, awayStats, historicalMatches = [], settings, season, matchId } = input;
+  const {
+    homeTeam,
+    awayTeam,
+    homeStats,
+    awayStats,
+    historicalMatches = [],
+    settings,
+    season,
+    matchId,
+    odds,
+    valueBetThreshold = 5.0,
+    tacticalAdjustments,
+  } = input;
   const weights = settings.weights;
 
   // 1. Base User Weights
@@ -326,8 +344,46 @@ export function runPredictionEngine(input: PredictionEngineInput): PredictionRes
 
   // 8. Expected Goals (lambda & mu)
   const homeAdv = settings.homeAdvantageMultiplier || 1.15;
-  const lambda = Math.max(0.2, homeAttack * awayDefense * LEAGUE_AVG_HOME_GOALS * (homeAdv / 1.1));
-  const mu = Math.max(0.15, awayAttack * homeDefense * LEAGUE_AVG_AWAY_GOALS * (1.1 / homeAdv));
+  let lambda = Math.max(0.2, homeAttack * awayDefense * LEAGUE_AVG_HOME_GOALS * (homeAdv / 1.1));
+  let mu = Math.max(0.15, awayAttack * homeDefense * LEAGUE_AVG_AWAY_GOALS * (1.1 / homeAdv));
+
+  // Dynamic Pre-Match Tactical & Fatigue Adjustment Multipliers
+  if (tacticalAdjustments) {
+    // Fatigue / Heavy Fixture Congestion (-5% xG)
+    if (tacticalAdjustments.homeFatigue) lambda *= 0.95;
+    if (tacticalAdjustments.awayFatigue) mu *= 0.95;
+
+    // Key Striker Missing (-15% attack xG)
+    if (tacticalAdjustments.homeKeyStrikerMissing) lambda *= 0.85;
+    if (tacticalAdjustments.awayKeyStrikerMissing) mu *= 0.85;
+
+    // Key Defender Missing (+15% opponent xG)
+    if (tacticalAdjustments.homeKeyDefenderMissing) mu *= 1.15;
+    if (tacticalAdjustments.awayKeyDefenderMissing) lambda *= 1.15;
+
+    // Low-Block / Deep Defensive Setup (-10% match xG)
+    if (tacticalAdjustments.lowBlockHome) {
+      mu *= 0.88;
+      lambda *= 0.92;
+    }
+    if (tacticalAdjustments.lowBlockAway) {
+      lambda *= 0.88;
+      mu *= 0.92;
+    }
+
+    // High-Intensity Pressing (+8% attack xG, +4% defensive exposure)
+    if (tacticalAdjustments.highPressHome) {
+      lambda *= 1.08;
+      mu *= 1.04;
+    }
+    if (tacticalAdjustments.highPressAway) {
+      mu *= 1.08;
+      lambda *= 1.04;
+    }
+
+    lambda = Math.max(0.1, lambda);
+    mu = Math.max(0.1, mu);
+  }
 
   // 9. Bivariate Poisson Matrix with Dixon-Coles Adjustment
   const MAX_GOALS = 8;
@@ -484,6 +540,20 @@ export function runPredictionEngine(input: PredictionEngineInput): PredictionRes
     }
   }
 
+  const valueBetReport = detectValueBets(
+    {
+      homeWinProb,
+      drawProb,
+      awayWinProb,
+      over25Prob: simOver25 / iterations,
+      under25Prob: 1 - simOver25 / iterations,
+      homeTeamName: homeTeam.name,
+      awayTeamName: awayTeam.name,
+    },
+    odds,
+    valueBetThreshold
+  );
+
   return {
     id: `pred_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
     matchId: matchId ?? null,
@@ -534,5 +604,11 @@ export function runPredictionEngine(input: PredictionEngineInput): PredictionRes
     reliabilityGrade,
     monteCarloIterations: iterations,
     weightsUsed: weights,
+
+    // Automated Value-Bet Detection & Bookmaker Comparison
+    oddsUsed: odds || null,
+    valueBets: valueBetReport.alerts,
+    hasValueBet: valueBetReport.hasAnyValueBet,
+    tacticalAdjustments: tacticalAdjustments || undefined,
   };
 }
